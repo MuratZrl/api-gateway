@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"api-gateway/internal/middleware"
 	"api-gateway/internal/repository"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -28,12 +30,23 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
+	// Initialize OpenTelemetry tracing
+	if cfg.Tracing.Enabled {
+		tp, err := middleware.InitTracer(context.Background(), "api-gateway", cfg.Tracing.Endpoint)
+		if err != nil {
+			log.Printf("Warning: Failed to initialize tracing: %v", err)
+		} else {
+			defer tp.Shutdown(context.Background())
+			middleware.LogInfo("Tracing initialized", map[string]interface{}{"endpoint": cfg.Tracing.Endpoint})
+		}
+	}
+
 	// Connect to MongoDB
 	repo, err := repository.NewMongoRepository(cfg.MongoDB.URI, cfg.MongoDB.Database)
 	if err != nil {
 		log.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
-	log.Println("Connected to MongoDB")
+	middleware.LogInfo("Connected to MongoDB", map[string]interface{}{"uri": cfg.MongoDB.URI})
 
 	// Connect to Redis
 	redisClient := redis.NewClient(&redis.Options{
@@ -41,11 +54,11 @@ func main() {
 		Password: cfg.Redis.Password,
 		DB:       cfg.Redis.DB,
 	})
-	log.Println("Connected to Redis")
+	middleware.LogInfo("Connected to Redis", map[string]interface{}{"addr": cfg.Redis.Addr})
 
 	// Create gateway
 	gw := gateway.New(cfg.Routes)
-	log.Printf("Loaded %d routes", len(cfg.Routes))
+	middleware.LogInfo("Routes loaded", map[string]interface{}{"count": len(cfg.Routes)})
 
 	// Create middleware
 	rateLimiter := middleware.NewRateLimiter(redisClient, cfg.RateLimit.RequestsPerMinute)
@@ -73,6 +86,9 @@ func main() {
 		MaxWait:     time.Duration(cfg.Retry.MaxWaitMs) * time.Millisecond,
 		Multiplier:  cfg.Retry.Multiplier,
 	}
+
+	// Structured logger
+	structLogger := middleware.NewStructuredLogger()
 
 	// Request Validation schemas
 	minPrice := 0.0
@@ -114,17 +130,20 @@ func main() {
 	adminHandler := admin.NewHandler(repo, gw, cfg.JWT.Secret)
 	adminHandler.RegisterRoutes(mux)
 
+	// Prometheus metrics endpoint
+	mux.Handle("/metrics", promhttp.Handler())
+
 	// Health check
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status": "ok"}`))
+		w.Write([]byte(`{"status": "ok", "version": "1.0.0"}`))
 	})
 
 	// Gateway handler for all other routes
 	mux.Handle("/api/", gw)
 
 	// Chain middleware (outermost runs first):
-	// CORS -> IPFilter -> Logging -> RateLimit -> Auth -> Retry -> CircuitBreaker -> Cache -> Validation -> Transform -> Handler
+	// CORS -> Metrics -> Tracing -> IPFilter -> StructuredLog -> Logging -> RateLimit -> Auth -> Retry -> CircuitBreaker -> Cache -> Validation -> Transform -> Handler
 	var handler http.Handler = mux
 	handler = middleware.Transform(transformRules)(handler)
 	handler = validator.Middleware(handler)
@@ -136,7 +155,10 @@ func main() {
 	handler = auth.Middleware(handler)
 	handler = rateLimiter.Middleware(handler)
 	handler = middleware.Logging(repo)(handler)
+	handler = structLogger.Middleware(handler)
 	handler = ipFilter.Middleware(handler)
+	handler = middleware.Tracing(handler)
+	handler = middleware.Metrics(handler)
 	handler = admin.CORS(handler)
 
 	// Start server
@@ -148,14 +170,17 @@ func main() {
 		WriteTimeout: time.Duration(cfg.Server.WriteTimeout) * time.Second,
 	}
 
-	log.Printf("API Gateway starting on %s", addr)
-	log.Printf("Features: RateLimit=%d/min, Cache=%v(TTL:%ds), IPFilter=%s, Retry=%d, CircuitBreaker=%d",
-		cfg.RateLimit.RequestsPerMinute,
-		cfg.Cache.Enabled, cfg.Cache.TTLSeconds,
-		cfg.IPFilter.Mode,
-		cfg.Retry.MaxRetries,
-		cfg.CircuitBreaker.MaxFailures,
-	)
+	middleware.LogInfo("API Gateway starting", map[string]interface{}{
+		"addr":            addr,
+		"rate_limit":      cfg.RateLimit.RequestsPerMinute,
+		"cache_enabled":   cfg.Cache.Enabled,
+		"cache_ttl":       cfg.Cache.TTLSeconds,
+		"ip_filter":       cfg.IPFilter.Mode,
+		"retry":           cfg.Retry.MaxRetries,
+		"circuit_breaker": cfg.CircuitBreaker.MaxFailures,
+		"tracing":         cfg.Tracing.Enabled,
+	})
+
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}

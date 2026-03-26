@@ -40,6 +40,10 @@ retry:
   max_wait_ms: 2000
   multiplier: 2.0
 
+tracing:
+  enabled: false
+  endpoint: "jaeger:4318"
+
 routes:
   - path: "/api/users"
     target: "http://user-service:8081"

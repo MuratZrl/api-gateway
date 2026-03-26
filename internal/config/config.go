@@ -16,6 +16,7 @@ type Config struct {
 	Cache          CacheConfig          `yaml:"cache"`
 	IPFilter       IPFilterConfig       `yaml:"ip_filter"`
 	Retry          RetryConfig          `yaml:"retry"`
+	Tracing        TracingConfig        `yaml:"tracing"`
 	Routes         []RouteConfig        `yaml:"routes"`
 }
 
@@ -68,6 +69,11 @@ type RetryConfig struct {
 	InitialWaitMs   int `yaml:"initial_wait_ms"`
 	MaxWaitMs       int `yaml:"max_wait_ms"`
 	Multiplier      float64 `yaml:"multiplier"`
+}
+
+type TracingConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	Endpoint string `yaml:"endpoint"`
 }
 
 type RouteConfig struct {
