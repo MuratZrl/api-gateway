@@ -1,0 +1,56 @@
+server:
+  port: 8080
+  read_timeout: 15
+  write_timeout: 15
+
+mongodb:
+  uri: "mongodb://mongodb:27017"
+  database: "api_gateway"
+
+redis:
+  addr: "redis:6379"
+  password: ""
+  db: 0
+
+jwt:
+  secret: "my-super-secret-key-change-in-production"
+  expiration: 3600
+
+rate_limit:
+  requests_per_minute: 60
+  burst: 10
+
+circuit_breaker:
+  max_failures: 5
+  timeout: 30
+  half_open_max_requests: 3
+
+cache:
+  enabled: true
+  ttl_seconds: 30
+
+ip_filter:
+  mode: "disabled"
+  whitelist: []
+  blacklist: []
+
+retry:
+  max_retries: 3
+  initial_wait_ms: 100
+  max_wait_ms: 2000
+  multiplier: 2.0
+
+routes:
+  - path: "/api/users"
+    target: "http://user-service:8081"
+    targets:
+      - "http://user-service:8081"
+    methods: ["GET", "POST", "PUT", "DELETE"]
+    protected: false
+
+  - path: "/api/products"
+    target: "http://product-service:8082"
+    targets:
+      - "http://product-service:8082"
+    methods: ["GET", "POST", "PUT", "DELETE"]
+    protected: false
