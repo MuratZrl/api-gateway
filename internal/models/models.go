@@ -10,6 +10,7 @@ type Route struct {
 	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id"`
 	Path      string             `bson:"path" json:"path"`
 	Target    string             `bson:"target" json:"target"`
+	Targets   []string           `bson:"targets,omitempty" json:"targets,omitempty"`
 	Methods   []string           `bson:"methods" json:"methods"`
 	Protected bool               `bson:"protected" json:"protected"`
 	CreatedAt time.Time          `bson:"created_at" json:"created_at"`

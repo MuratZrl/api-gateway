@@ -2,6 +2,7 @@ package admin
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -177,11 +178,17 @@ func (h *Handler) refreshGatewayRoutes(r *http.Request) {
 		routeConfigs = append(routeConfigs, config.RouteConfig{
 			Path:      route.Path,
 			Target:    route.Target,
+			Targets:   route.Targets,
 			Methods:   route.Methods,
 			Protected: route.Protected,
 		})
 	}
-	h.gateway.UpdateRoutes(routeConfigs)
+
+	// A malformed target reaches here straight from an admin request body.
+	// Reject the swap and keep serving the current table rather than dying.
+	if err := h.gateway.UpdateRoutes(routeConfigs); err != nil {
+		log.Printf("admin: refusing route update: %v", err)
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {

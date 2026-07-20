@@ -1,23 +1,33 @@
 package gateway
 
 import (
+	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"sync"
 	"sync/atomic"
+	"time"
 )
+
+// deadCooldown is how long a target stays out of rotation after a proxy error.
+// Without it a single transient blip would remove a target for the lifetime of
+// the process, since nothing else ever marks a target healthy again.
+const deadCooldown = 30 * time.Second
 
 type LoadBalancer struct {
 	targets []*Target
-	current atomic.Int64
+	current atomic.Uint64
 }
 
 type Target struct {
 	URL   *url.URL
 	Proxy *httputil.ReverseProxy
-	mu    sync.RWMutex
-	alive bool
+
+	mu sync.RWMutex
+	// deadUntil is the instant this target rejoins rotation. The zero value
+	// means healthy.
+	deadUntil time.Time
 }
 
 func NewLoadBalancer(targets []string) *LoadBalancer {
@@ -33,11 +43,12 @@ func NewLoadBalancer(targets []string) *LoadBalancer {
 		target := &Target{
 			URL:   targetURL,
 			Proxy: proxy,
-			alive: true,
 		}
 
 		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+			log.Printf("Proxy error for %s via %s: %v", r.URL.Path, targetURL, err)
 			target.SetAlive(false)
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadGateway)
 			w.Write([]byte(`{"error": "service unavailable"}`))
 		}
@@ -48,24 +59,25 @@ func NewLoadBalancer(targets []string) *LoadBalancer {
 	return lb
 }
 
-// NextTarget returns the next available target using round-robin
+// NextTarget returns the next available target using round-robin. The counter
+// advances exactly once per call, so a dead target does not distort the share
+// the healthy ones receive.
 func (lb *LoadBalancer) NextTarget() *Target {
-	if len(lb.targets) == 0 {
+	n := uint64(len(lb.targets))
+	if n == 0 {
 		return nil
 	}
 
-	// Try all targets at most once
-	for range lb.targets {
-		idx := lb.current.Add(1) % int64(len(lb.targets))
-		target := lb.targets[idx]
-		if target.IsAlive() {
+	start := lb.current.Add(1) - 1
+	for i := uint64(0); i < n; i++ {
+		if target := lb.targets[(start+i)%n]; target.IsAlive() {
 			return target
 		}
 	}
 
-	// If no alive target found, return the next one anyway
-	idx := lb.current.Add(1) % int64(len(lb.targets))
-	return lb.targets[idx]
+	// Every target is cooling down. Still serve from the slot this call owns
+	// rather than failing outright; the upstream may well have recovered.
+	return lb.targets[start%n]
 }
 
 func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -86,11 +98,16 @@ func (lb *LoadBalancer) Targets() []*Target {
 func (t *Target) IsAlive() bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return t.alive
+	return time.Now().After(t.deadUntil)
 }
 
 func (t *Target) SetAlive(alive bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.alive = alive
+
+	if alive {
+		t.deadUntil = time.Time{}
+		return
+	}
+	t.deadUntil = time.Now().Add(deadCooldown)
 }
