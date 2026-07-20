@@ -11,8 +11,8 @@ A feature-rich API Gateway built from scratch in Go with middleware-based archit
                                     └────────┬─────────┘
                                              │ scrape
 ┌──────────┐     ┌──────────────────────────────────────────────┐     ┌─────────────────┐
-│          │     │              API Gateway :8080                │     │  User Service    │
-│  Client  │────>│                                              │────>│  :8081           │
+│          │     │              API Gateway :8080                │     │ User Service x2  │
+│  Client  │────>│                                              │────>│  :8081, :8083    │
 │          │     │  CORS -> Metrics -> Tracing -> IPFilter ->   │     └─────────────────┘
 └──────────┘     │  StructLog -> Log -> RateLimit -> Auth ->    │
                  │  Retry -> CircuitBreaker -> Cache ->         │     ┌─────────────────┐
@@ -36,7 +36,7 @@ A feature-rich API Gateway built from scratch in Go with middleware-based archit
 | **JWT Auth** | Bearer token + API key authentication |
 | **Circuit Breaker** | Closed/Open/Half-Open state machine |
 | **Caching** | Redis response cache with TTL and HIT/MISS headers |
-| **Load Balancing** | Round-robin across multiple targets |
+| **Load Balancing** | Round-robin across a route's `targets` list |
 | **Request Validation** | JSON body schema validation |
 | **Transforms** | Add/remove request/response headers and request body fields |
 | **IP Filtering** | Whitelist/blacklist mode |

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"sync"
 )
 
@@ -24,11 +25,24 @@ var (
 	nextID = 4
 )
 
+// instanceID identifies which replica served a response. It is echoed in the
+// X-Instance header so a caller behind the gateway's load balancer can tell the
+// replicas apart, which is what makes round-robin observable end to end.
+func instanceID() string {
+	if id := os.Getenv("INSTANCE_ID"); id != "" {
+		return id
+	}
+	return "user-service-1"
+}
+
 func main() {
+	instance := instanceID()
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/users", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Instance", instance)
 
 		switch r.Method {
 		case http.MethodGet:
@@ -63,9 +77,10 @@ func main() {
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"service": "user-service", "status": "ok"}`))
+		w.Header().Set("X-Instance", instance)
+		fmt.Fprintf(w, `{"service": "user-service", "instance": %q, "status": "ok"}`, instance)
 	})
 
-	log.Println("User Service starting on :8081")
+	log.Printf("User Service %s starting on :8081", instance)
 	log.Fatal(http.ListenAndServe(":8081", mux))
 }

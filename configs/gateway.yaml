@@ -49,6 +49,7 @@ routes:
     target: "http://user-service:8081"
     targets:
       - "http://user-service:8081"
+      - "http://user-service-2:8081"
     methods: ["GET", "POST", "PUT", "DELETE"]
     protected: false
 

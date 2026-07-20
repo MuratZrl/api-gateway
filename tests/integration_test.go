@@ -90,11 +90,8 @@ func TestIntegration_ProxyToProductService(t *testing.T) {
 // configs/gateway.yaml, so every request here goes through LoadBalancer.
 // NextTarget rather than a bare single-host proxy.
 //
-// Distribution across two *distinct* backends is asserted deterministically in
-// internal/gateway (TestGateway_RoundRobinsAcrossTargets); it is not observable
-// here, because the compose stack runs one replica per service and the
-// responses carry no upstream identity. Round-robin over N targets that all
-// resolve to the same container is indistinguishable from a single target.
+// TestIntegration_RoundRobinAlternatesBetweenInstances below asserts the actual
+// distribution across the two replicas.
 func TestIntegration_LoadBalancedRouteServes(t *testing.T) {
 	waitForGateway(t)
 
@@ -119,6 +116,70 @@ func TestIntegration_LoadBalancedRouteServes(t *testing.T) {
 
 		if len(users) == 0 {
 			t.Errorf("request %d: expected at least one user from the load-balanced route", i)
+		}
+	}
+}
+
+// TestIntegration_RoundRobinAlternatesBetweenInstances proves the gateway
+// actually distributes across both upstreams rather than pinning to the first.
+// configs/gateway.yaml points /api/users at user-service and user-service-2,
+// and each replica stamps its own INSTANCE_ID into X-Instance.
+//
+// Every request carries a unique query string: the cache keys on the full
+// request URI, so without that a cached response would short-circuit the
+// balancer and only the first request would ever reach an upstream.
+func TestIntegration_RoundRobinAlternatesBetweenInstances(t *testing.T) {
+	waitForGateway(t)
+
+	const requests = 6
+
+	seen := make([]string, 0, requests)
+	counts := map[string]int{}
+
+	for i := 0; i < requests; i++ {
+		path := fmt.Sprintf("/api/users?_rr_test=%d_%d", time.Now().UnixNano(), i)
+		resp, err := http.Get(gatewayURL + path)
+		if err != nil {
+			t.Fatalf("request %d failed: %v", i, err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			t.Fatalf("request %d: expected 200, got %d (%s)", i, resp.StatusCode, body)
+		}
+		if resp.Header.Get("X-Cache") != "MISS" {
+			resp.Body.Close()
+			t.Fatalf("request %d was served from cache (X-Cache: %s); it never reached an upstream",
+				i, resp.Header.Get("X-Cache"))
+		}
+
+		instance := resp.Header.Get("X-Instance")
+		resp.Body.Close()
+
+		if instance == "" {
+			t.Fatalf("request %d: upstream did not identify itself via X-Instance", i)
+		}
+		seen = append(seen, instance)
+		counts[instance]++
+	}
+
+	if len(counts) != 2 {
+		t.Fatalf("expected both replicas to serve traffic, saw %d distinct instance(s): %v", len(counts), seen)
+	}
+	for instance, count := range counts {
+		if count != requests/2 {
+			t.Errorf("expected an even %d/%d split, %s served %d of %d: %v",
+				requests/2, requests/2, instance, count, requests, seen)
+		}
+	}
+
+	// Round-robin is an ordering contract, not merely a distribution one: a
+	// randomised balancer could still produce an even split.
+	for i := 1; i < len(seen); i++ {
+		if seen[i] == seen[i-1] {
+			t.Errorf("expected instances to alternate, got %v", seen)
+			break
 		}
 	}
 }

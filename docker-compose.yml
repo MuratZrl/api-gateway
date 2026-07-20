@@ -7,14 +7,27 @@ services:
       - mongodb
       - redis
       - user-service
+      - user-service-2
       - product-service
     environment:
       - CONFIG_PATH=configs/gateway.yaml
 
+  # Two replicas of the same service so the gateway's round-robin load
+  # balancing across the /api/users targets list is observable: each replica
+  # stamps its own X-Instance header on every response.
   user-service:
     build: ./services/user-service
     ports:
       - "8081:8081"
+    environment:
+      - INSTANCE_ID=user-service-1
+
+  user-service-2:
+    build: ./services/user-service
+    ports:
+      - "8083:8081"
+    environment:
+      - INSTANCE_ID=user-service-2
 
   product-service:
     build: ./services/product-service
