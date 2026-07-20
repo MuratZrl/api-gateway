@@ -38,7 +38,7 @@ A feature-rich API Gateway built from scratch in Go with middleware-based archit
 | **Caching** | Redis response cache with TTL and HIT/MISS headers |
 | **Load Balancing** | Round-robin across multiple targets |
 | **Request Validation** | JSON body schema validation |
-| **Transforms** | Add/remove request/response headers and body fields |
+| **Transforms** | Add/remove request/response headers and request body fields |
 | **IP Filtering** | Whitelist/blacklist mode |
 | **Retry** | Exponential backoff for idempotent requests |
 | **Prometheus Metrics** | Request count, latency, cache hit rate, in-flight |
@@ -124,7 +124,7 @@ Every API response includes:
 - `X-RateLimit-Remaining` — Remaining requests
 - `X-RateLimit-Reset` — Window reset timestamp
 - `X-Cache` — `HIT` or `MISS` (GET requests)
-- `X-Powered-By` — API Gateway
+- `X-Powered-By` — API Gateway (`/api/*` routes)
 - `X-Trace-ID` — Distributed trace ID (when tracing enabled)
 
 ## Monitoring
