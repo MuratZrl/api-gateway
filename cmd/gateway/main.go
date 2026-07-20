@@ -36,7 +36,11 @@ func main() {
 		if err != nil {
 			log.Printf("Warning: Failed to initialize tracing: %v", err)
 		} else {
-			defer tp.Shutdown(context.Background())
+			defer func() {
+				if err := tp.Shutdown(context.Background()); err != nil {
+					log.Printf("Warning: Failed to shut down tracer: %v", err)
+				}
+			}()
 			middleware.LogInfo("Tracing initialized", map[string]interface{}{"endpoint": cfg.Tracing.Endpoint})
 		}
 	}

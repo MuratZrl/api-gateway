@@ -172,7 +172,7 @@ func (m *CircuitBreakerManager) Middleware(next http.Handler) http.Handler {
 		if !cb.allowRequest() {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
-			w.Write([]byte(fmt.Sprintf(`{"error": "service unavailable", "circuit_breaker": "%s"}`, cb.state)))
+			fmt.Fprintf(w, `{"error": "service unavailable", "circuit_breaker": "%s"}`, cb.state)
 			return
 		}
 

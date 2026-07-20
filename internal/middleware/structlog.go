@@ -92,8 +92,8 @@ func (sl *StructuredLogger) Middleware(next http.Handler) http.Handler {
 
 		jsonBytes, err := json.Marshal(entry)
 		if err == nil {
-			sl.writer.Write(jsonBytes)
-			sl.writer.Write([]byte("\n"))
+			_, _ = sl.writer.Write(jsonBytes)
+			_, _ = sl.writer.Write([]byte("\n"))
 		}
 	})
 }

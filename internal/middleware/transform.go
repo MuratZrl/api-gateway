@@ -27,7 +27,6 @@ type transformResponseWriter struct {
 	body       *bytes.Buffer
 	statusCode int
 	rule       *TransformRule
-	written    bool
 }
 
 func (w *transformResponseWriter) Write(b []byte) (int, error) {

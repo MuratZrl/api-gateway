@@ -1,35 +1,51 @@
+version: "2"
+run:
+  tests: false
 linters:
   enable:
-    - errcheck
-    - gosimple
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
     - bodyclose
     - goconst
     - misspell
     - unconvert
     - unparam
-
-linters-settings:
-  errcheck:
-    check-blank: false
-  goconst:
-    min-len: 3
-    min-occurrences: 3
-  misspell:
-    locale: US
-
+  settings:
+    errcheck:
+      check-blank: false
+      # Writing to an HTTP response is the last thing a handler does; there is
+      # no caller left to return the error to and nothing useful to do with it.
+      exclude-functions:
+        - (net/http.ResponseWriter).Write
+        - (*encoding/json.Encoder).Encode
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+      # JSON keys and metric label names, not magic constants.
+      ignore-string-values: '^(error|string|method|path)$'
+    misspell:
+      locale: US
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - errcheck
+          - unparam
+        path: _test\.go
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck
-        - unparam
   max-issues-per-linter: 50
   max-same-issues: 10
-
-run:
-  timeout: 5m
-  tests: false
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
