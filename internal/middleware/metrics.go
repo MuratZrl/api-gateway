@@ -9,6 +9,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+// Operational endpoints served by the gateway itself rather than proxied.
+const (
+	pathMetrics = "/metrics"
+	pathHealth  = "/health"
+)
+
 var (
 	httpRequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
@@ -93,7 +99,7 @@ func (w *metricsResponseWriter) Write(b []byte) (int, error) {
 func Metrics(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Don't track metrics endpoint itself
-		if r.URL.Path == "/metrics" {
+		if r.URL.Path == pathMetrics {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -140,13 +146,18 @@ func RecordCircuitBreakerState(target string, state int) {
 	circuitBreakerState.WithLabelValues(target).Set(float64(state))
 }
 
+// normalizePath groups a request path into a bounded set of label values.
+// Anything that does not match a known route collapses into "other": returning
+// the raw path would let unauthenticated traffic (scanners probing /.env,
+// /wp-login.php, ...) mint an unbounded number of Prometheus time series and
+// circuit breakers that are never reclaimed.
 func normalizePath(path string) string {
 	// Group API paths by their prefix
-	prefixes := []string{"/api/users", "/api/products", "/admin/routes", "/admin/stats", "/admin/keys", "/admin/token", "/health"}
+	prefixes := []string{"/api/users", "/api/products", "/admin/routes", "/admin/stats", "/admin/keys", "/admin/token", pathHealth, pathMetrics}
 	for _, prefix := range prefixes {
 		if len(path) >= len(prefix) && path[:len(prefix)] == prefix {
 			return prefix
 		}
 	}
-	return path
+	return "other"
 }

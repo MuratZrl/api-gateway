@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -47,8 +48,11 @@ func (c *Cache) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Don't cache admin endpoints
-		if len(r.URL.Path) >= 6 && r.URL.Path[:6] == "/admin" {
+		// Don't cache admin endpoints, nor the gateway's own operational
+		// endpoints. Caching /metrics hands Prometheus a stale exposition
+		// payload for a full TTL and makes every scrape increment the cache
+		// counters, which would poison the very metrics served there.
+		if strings.HasPrefix(r.URL.Path, "/admin") || r.URL.Path == pathMetrics || r.URL.Path == pathHealth {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -62,11 +66,16 @@ func (c *Cache) Middleware(next http.Handler) http.Handler {
 		// Try to get from cache
 		cached, err := c.client.Get(ctx, cacheKey).Bytes()
 		if err == nil {
+			RecordCacheHit()
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Cache", "HIT")
 			w.Write(cached)
 			return
 		}
+
+		// A Redis error is counted as a miss: the request is served from the
+		// upstream either way, which is what the hit-rate ratio measures.
+		RecordCacheMiss()
 
 		// Cache miss — forward request and capture response
 		recorder := &cacheResponseWriter{

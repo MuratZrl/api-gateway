@@ -30,6 +30,11 @@ func (s State) String() string {
 }
 
 type circuitBreaker struct {
+	// target is the bounded key this breaker was created under. It is set at
+	// construction and never written again, so it is safe to read without mu.
+	// It doubles as the label value for gateway_circuit_breaker_state.
+	target string
+
 	mu                  sync.RWMutex
 	state               State
 	failures            int
@@ -38,6 +43,18 @@ type circuitBreaker struct {
 	timeout             time.Duration
 	halfOpenMaxRequests int
 	lastFailureTime     time.Time
+}
+
+// setState transitions the breaker and mirrors the new state into the
+// gateway_circuit_breaker_state gauge, so the gauge can never drift from the
+// state machine. Callers must already hold cb.mu for writing.
+//
+// Taking the Prometheus vector's internal lock while holding cb.mu is safe:
+// the gauge is a plain Gauge, so Set never calls back into this package and
+// the ordering cb.mu -> vector lock is never reversed.
+func (cb *circuitBreaker) setState(s State) {
+	cb.state = s
+	RecordCircuitBreakerState(cb.target, int(s))
 }
 
 type CircuitBreakerManager struct {
@@ -75,31 +92,37 @@ func (m *CircuitBreakerManager) getBreaker(target string) *circuitBreaker {
 	}
 
 	cb = &circuitBreaker{
+		target:              target,
 		state:               StateClosed,
 		maxFailures:         m.maxFailures,
 		timeout:             m.timeout,
 		halfOpenMaxRequests: m.halfOpenMaxRequests,
 	}
+	// Publish the initial state so the series exists before the first failure.
+	RecordCircuitBreakerState(target, int(StateClosed))
 	m.breakers[target] = cb
 	return cb
 }
 
-func (cb *circuitBreaker) allowRequest() bool {
+// allowRequest reports whether the request may proceed, and returns the state
+// the decision was made under so callers can report it without a second,
+// unsynchronized read of cb.state.
+func (cb *circuitBreaker) allowRequest() (bool, State) {
 	cb.mu.RLock()
 	defer cb.mu.RUnlock()
 
 	switch cb.state {
 	case StateClosed:
-		return true
+		return true, cb.state
 	case StateOpen:
 		if time.Since(cb.lastFailureTime) > cb.timeout {
-			return true // Will transition to half-open
+			return true, cb.state // Will transition to half-open
 		}
-		return false
+		return false, cb.state
 	case StateHalfOpen:
-		return cb.successes < cb.halfOpenMaxRequests
+		return cb.successes < cb.halfOpenMaxRequests, cb.state
 	}
-	return false
+	return false, cb.state
 }
 
 func (cb *circuitBreaker) recordSuccess() {
@@ -110,8 +133,8 @@ func (cb *circuitBreaker) recordSuccess() {
 	case StateHalfOpen:
 		cb.successes++
 		if cb.successes >= cb.halfOpenMaxRequests {
-			log.Printf("Circuit breaker: half-open -> closed")
-			cb.state = StateClosed
+			log.Printf("Circuit breaker: half-open -> closed for %s", cb.target)
+			cb.setState(StateClosed)
 			cb.failures = 0
 			cb.successes = 0
 		}
@@ -130,12 +153,12 @@ func (cb *circuitBreaker) recordFailure() {
 	switch cb.state {
 	case StateClosed:
 		if cb.failures >= cb.maxFailures {
-			log.Printf("Circuit breaker: closed -> open (failures: %d)", cb.failures)
-			cb.state = StateOpen
+			log.Printf("Circuit breaker: closed -> open for %s (failures: %d)", cb.target, cb.failures)
+			cb.setState(StateOpen)
 		}
 	case StateHalfOpen:
-		log.Printf("Circuit breaker: half-open -> open")
-		cb.state = StateOpen
+		log.Printf("Circuit breaker: half-open -> open for %s", cb.target)
+		cb.setState(StateOpen)
 		cb.successes = 0
 	}
 }
@@ -152,11 +175,11 @@ func (r *circuitBreakerRecorder) WriteHeader(code int) {
 
 func (m *CircuitBreakerManager) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Use the host as the circuit breaker key
-		target := r.URL.Host
-		if target == "" {
-			target = r.URL.Path
-		}
+		// Key the breaker on the normalized route, not on raw request input.
+		// r.URL.Host is attacker-controlled whenever a client sends an
+		// absolute-form request target, and a raw path lets any scanner mint
+		// an unbounded number of breakers and gauge label values.
+		target := normalizePath(r.URL.Path)
 
 		cb := m.getBreaker(target)
 
@@ -164,15 +187,16 @@ func (m *CircuitBreakerManager) Middleware(next http.Handler) http.Handler {
 		cb.mu.Lock()
 		if cb.state == StateOpen && time.Since(cb.lastFailureTime) > cb.timeout {
 			log.Printf("Circuit breaker: open -> half-open for %s", target)
-			cb.state = StateHalfOpen
+			cb.setState(StateHalfOpen)
 			cb.successes = 0
 		}
 		cb.mu.Unlock()
 
-		if !cb.allowRequest() {
+		allowed, state := cb.allowRequest()
+		if !allowed {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprintf(w, `{"error": "service unavailable", "circuit_breaker": "%s"}`, cb.state)
+			fmt.Fprintf(w, `{"error": "service unavailable", "circuit_breaker": "%s"}`, state)
 			return
 		}
 
