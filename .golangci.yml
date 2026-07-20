@@ -20,7 +20,8 @@ linters:
       min-len: 3
       min-occurrences: 3
       # JSON keys and metric label names, not magic constants.
-      ignore-string-values: '^(error|string|method|path)$'
+      ignore-string-values:
+        - '^(error|string|method|path)$'
     misspell:
       locale: US
   exclusions:
